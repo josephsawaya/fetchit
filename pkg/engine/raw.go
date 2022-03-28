@@ -45,12 +45,12 @@ func rawPodman(ctx context.Context, mo *FileMountOptions) error {
 	if mo.Previous != nil {
 		raw, err := rawPodFromBytes([]byte(*mo.Previous))
 		if err != nil {
-			return err
+			return utils.WrapErr(err, "Error converting json/yaml into rawPod")
 		}
 
 		err = deleteContainer(mo.Conn, raw.Name)
 		if err != nil {
-			return err
+			return utils.WrapErr(err, "Error deleting container")
 		}
 
 		klog.Infof("Deleted podman container %s", raw.Name)
@@ -64,19 +64,19 @@ func rawPodman(ctx context.Context, mo *FileMountOptions) error {
 
 	rawFile, err := ioutil.ReadFile(mo.Path)
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error reading file %s", mo.Path)
 	}
 
 	raw, err := rawPodFromBytes(rawFile)
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error converting json/yaml into rawPod")
 	}
 
 	klog.Infof("Identifying if image exists locally")
 
 	err = detectOrFetchImage(mo.Conn, raw.Image, mo.Target.Raw.PullImage)
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error fetching image")
 	}
 
 	err = removeExisting(mo.Conn, raw.Name)
@@ -88,12 +88,12 @@ func rawPodman(ctx context.Context, mo *FileMountOptions) error {
 
 	createResponse, err := containers.CreateWithSpec(mo.Conn, s, nil)
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error creating container")
 	}
 	klog.Infof("Container %s created.", s.Name)
 
 	if err := containers.Start(mo.Conn, createResponse.ID, nil); err != nil {
-		return err
+		return utils.WrapErr(err, "Error starting container")
 	}
 	klog.Infof("Container %s started....Requeuing", s.Name)
 
@@ -115,12 +115,12 @@ func createSpecGen(raw RawPod) *specgen.SpecGenerator {
 func deleteContainer(conn context.Context, podName string) error {
 	err := containers.Stop(conn, podName, nil)
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error stopping container")
 	}
 
 	containers.Remove(conn, podName, new(containers.RemoveOptions).WithForce(true))
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error removing container")
 	}
 
 	return nil
@@ -132,13 +132,13 @@ func detectOrFetchImage(conn context.Context, imageName string, force bool) erro
 	present, err := images.Exists(conn, imageName, nil)
 	klog.Infof("Is image present? %t", present)
 	if err != nil {
-		return err
+		return utils.WrapErr(err, "Error checking if image exists")
 	}
 
 	if !present || force {
 		_, err = images.Pull(conn, imageName, nil)
 		if err != nil {
-			return err
+			return utils.WrapErr(err, "Error pulling container image")
 		}
 	}
 
@@ -169,7 +169,7 @@ func removeExisting(conn context.Context, podName string) error {
 		klog.Infof("A container named %s already exists. Removing the container before redeploy.", podName)
 		err := deleteContainer(conn, podName)
 		if err != nil {
-			return err
+			utils.WrapErr(err, "Error deleting container")
 		}
 	}
 
