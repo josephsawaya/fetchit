@@ -11,6 +11,10 @@ func fileTransferPodman(ctx context.Context, mo *SingleMethodObj, path, dest str
 	if prev != nil {
 		pathToRemove := filepath.Join(dest, filepath.Base(*prev))
 		s := generateSpecRemove(mo.Method, filepath.Base(pathToRemove), pathToRemove, dest, mo.Target)
+		err := detectOrFetchImage(mo.Conn, fetchitImage, false)
+		if err != nil {
+			return err
+		}
 		createResponse, err := createAndStartContainer(mo.Conn, s)
 		if err != nil {
 			return err
