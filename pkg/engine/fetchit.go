@@ -42,6 +42,7 @@ const (
 var (
 	defaultConfigPath   = filepath.Join("/opt", "mount", "config.yaml")
 	defaultConfigBackup = filepath.Join("/opt", "mount", "config-backup.yaml")
+	zeroHash            = plumbing.Hash{}
 )
 
 // FetchitConfig requires necessary objects to process targets
@@ -450,32 +451,53 @@ func (hc *FetchitConfig) processRaw(ctx context.Context, target *Target, skew in
 		}
 	}
 
-	latest, err := hc.GetLatest(mo.Target)
+	current, err := hc.GetCurrent(mo.Target, mo.Method)
+	if err != nil {
+		klog.Errorf("Failed to get initial current commit hash for initial application: %v", err)
+		return
+	}
+
+	if initial {
+		if current != zeroHash {
+			err = hc.CatchUpCurrent(ctx, mo, current, raw.TargetPath, &tag)
+			if err != nil {
+				klog.Errorf("Failed to catch up to current: %v", err)
+				return
+			}
+		}
+
+		progress, err := hc.GetInProgress(ctx, target, mo.Method)
+		if err != nil {
+			klog.Errorf("Failed to get in progress tag: %v", err)
+			return
+		}
+
+		if progress != zeroHash {
+			err := hc.CatchUpProgress(ctx, mo, current, progress, raw.TargetPath, &tag)
+			if err != nil {
+				klog.Errorf("Failed to catch up to in progress: %v", err)
+			}
+			current = progress
+			klog.Infof("Moved raw from %s to %s for target %s", current, progress, target.Name)
+		}
+
+		raw.initialRun = false
+	}
+
+	latest, err := hc.GetLatest(mo.Target, mo.Method)
 	if err != nil {
 		klog.Errorf("Failed to get latest commit: %v", err)
 		return
 	}
 
-	current, err := hc.GetCurrent(mo.Target, mo.Method)
-	if err != nil {
-		klog.Errorf("Failed to get current commit: %v", err)
-		return
-	}
-
 	if latest != current {
-		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Raw.TargetPath, &tag)
+		err := hc.CatchUpLatest(ctx, mo, current, latest, raw.TargetPath, &tag)
 		if err != nil {
-			klog.Errorf("Failed to apply changes: %v", err)
+			klog.Errorf("Error catching up to latest: %v", err)
 			return
 		}
-
-		hc.UpdateCurrent(ctx, target, mo.Method, latest)
 		klog.Infof("Moved raw from %s to %s for target %s", current, latest, target.Name)
-	} else {
-		klog.Infof("No changes applied to target %s this run, raw currently at %s", target.Name, current)
 	}
-
-	raw.initialRun = false
 }
 
 func (hc *FetchitConfig) processAnsible(ctx context.Context, target *Target, skew int) {
@@ -499,10 +521,15 @@ func (hc *FetchitConfig) processAnsible(ctx context.Context, target *Target, ske
 		}
 	}
 
-	latest, err := hc.GetLatest(mo.Target)
+	latest, err := hc.GetLatest(mo.Target, mo.Method)
 	if err != nil {
 		klog.Errorf("Failed to get latest commit: %v", err)
 		return
+	}
+
+	err = hc.CreateInProgress(ctx, target, mo.Method, latest)
+	if err != nil {
+		klog.Errorf("Failed to create latest tag: %v", err)
 	}
 
 	current, err := hc.GetCurrent(mo.Target, mo.Method)
@@ -515,6 +542,10 @@ func (hc *FetchitConfig) processAnsible(ctx context.Context, target *Target, ske
 		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Ansible.TargetPath, &tag)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
+			err := hc.DeleteInProgress(ctx, target, mo.Method)
+			if err != nil {
+				klog.Errorf("Error deleting latest target: %v", err)
+			}
 			return
 		}
 
@@ -524,6 +555,10 @@ func (hc *FetchitConfig) processAnsible(ctx context.Context, target *Target, ske
 		klog.Infof("No changes applied to target %s this run, ansible currently at %s", target.Name, current)
 	}
 
+	err = hc.DeleteInProgress(ctx, target, mo.Method)
+	if err != nil {
+		klog.Errorf("Error deleting latest target: %v", err)
+	}
 	ans.initialRun = false
 }
 
@@ -568,10 +603,15 @@ func (hc *FetchitConfig) processSystemd(ctx context.Context, target *Target, ske
 		}
 	}
 
-	latest, err := hc.GetLatest(mo.Target)
+	latest, err := hc.GetLatest(mo.Target, mo.Method)
 	if err != nil {
 		klog.Errorf("Failed to get latest commit: %v", err)
 		return
+	}
+
+	err = hc.CreateInProgress(ctx, target, mo.Method, latest)
+	if err != nil {
+		klog.Errorf("Failed to create latest tag: %v", err)
 	}
 
 	current, err := hc.GetCurrent(mo.Target, mo.Method)
@@ -584,6 +624,10 @@ func (hc *FetchitConfig) processSystemd(ctx context.Context, target *Target, ske
 		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Systemd.TargetPath, &tag)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
+			err := hc.DeleteInProgress(ctx, target, mo.Method)
+			if err != nil {
+				klog.Errorf("Error deleting latest target: %v", err)
+			}
 			return
 		}
 
@@ -593,6 +637,10 @@ func (hc *FetchitConfig) processSystemd(ctx context.Context, target *Target, ske
 		klog.Infof("No changes applied to target %s this run, systemd currently at %s", target.Name, current)
 	}
 
+	err = hc.DeleteInProgress(ctx, target, mo.Method)
+	if err != nil {
+		klog.Errorf("Error deleting latest target: %v", err)
+	}
 	sd.initialRun = false
 }
 
@@ -616,10 +664,15 @@ func (hc *FetchitConfig) processFileTransfer(ctx context.Context, target *Target
 		}
 	}
 
-	latest, err := hc.GetLatest(mo.Target)
+	latest, err := hc.GetLatest(mo.Target, mo.Method)
 	if err != nil {
 		klog.Errorf("Failed to get latest commit: %v", err)
 		return
+	}
+
+	err = hc.CreateInProgress(ctx, target, mo.Method, latest)
+	if err != nil {
+		klog.Errorf("Failed to create latest tag: %v", err)
 	}
 
 	current, err := hc.GetCurrent(mo.Target, mo.Method)
@@ -632,6 +685,10 @@ func (hc *FetchitConfig) processFileTransfer(ctx context.Context, target *Target
 		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.FileTransfer.TargetPath, nil)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
+			err := hc.DeleteInProgress(ctx, target, mo.Method)
+			if err != nil {
+				klog.Errorf("Error deleting latest target: %v", err)
+			}
 			return
 		}
 
@@ -641,6 +698,10 @@ func (hc *FetchitConfig) processFileTransfer(ctx context.Context, target *Target
 		klog.Infof("No changes applied to target %s this run, filetransfer currently at %s", target.Name, current)
 	}
 
+	err = hc.DeleteInProgress(ctx, target, mo.Method)
+	if err != nil {
+		klog.Errorf("Error deleting latest target: %v", err)
+	}
 	ft.initialRun = false
 }
 
@@ -666,10 +727,15 @@ func (hc *FetchitConfig) processKube(ctx context.Context, target *Target, skew i
 		}
 	}
 
-	latest, err := hc.GetLatest(mo.Target)
+	latest, err := hc.GetLatest(mo.Target, mo.Method)
 	if err != nil {
 		klog.Errorf("Failed to get latest commit: %v", err)
 		return
+	}
+
+	err = hc.CreateInProgress(ctx, target, mo.Method, latest)
+	if err != nil {
+		klog.Errorf("Failed to create latest tag: %v", err)
 	}
 
 	current, err := hc.GetCurrent(mo.Target, mo.Method)
@@ -682,6 +748,10 @@ func (hc *FetchitConfig) processKube(ctx context.Context, target *Target, skew i
 		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Kube.TargetPath, &tag)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
+			err := hc.DeleteInProgress(ctx, target, mo.Method)
+			if err != nil {
+				klog.Errorf("Error deleting latest target: %v", err)
+			}
 			return
 		}
 
@@ -691,6 +761,10 @@ func (hc *FetchitConfig) processKube(ctx context.Context, target *Target, skew i
 		klog.Infof("No changes applied to target %s this run, kube currently at %s", target.Name, current)
 	}
 
+	err = hc.DeleteInProgress(ctx, target, mo.Method)
+	if err != nil {
+		klog.Errorf("Error deleting latest target: %v", err)
+	}
 	kube.initialRun = false
 }
 

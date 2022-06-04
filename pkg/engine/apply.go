@@ -12,13 +12,76 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/redhat-et/fetchit/pkg/engine/utils"
+	"k8s.io/klog/v2"
 )
+
+func (fc *FetchitConfig) CatchUpCurrent(ctx context.Context, mo *SingleMethodObj, current plumbing.Hash, targetPath string, tag *[]string) error {
+	err := fc.Apply(ctx, mo, zeroHash, current, targetPath, tag)
+	if err != nil {
+		return utils.WrapErr(err, "Failed to apply changes")
+	}
+	klog.Infof("Moved raw from %s to %s for target %s", zeroHash, current, mo.Target.Name)
+
+	return nil
+}
+
+func (fc *FetchitConfig) CatchUpProgress(ctx context.Context, mo *SingleMethodObj, current, progress plumbing.Hash, targetPath string, tag *[]string) error {
+	if progress != current {
+		err := fc.Apply(ctx, mo, current, progress, targetPath, tag)
+		if err != nil {
+			if err := fc.DeleteInProgress(ctx, mo.Target, mo.Method); err != nil {
+				return utils.WrapErr(err, "Failed to delete progress")
+			}
+
+			return utils.WrapErr(err, "Failed to apply from current to in progress")
+		}
+
+		err = fc.UpdateCurrent(ctx, mo.Target, mo.Method, progress)
+		if err != nil {
+			return utils.WrapErr(err, "Failed to update current to progress")
+		}
+	}
+
+	if err := fc.DeleteInProgress(ctx, mo.Target, mo.Method); err != nil {
+		return utils.WrapErr(err, "Failed to delete progress")
+	}
+
+	return nil
+}
+
+func (fc *FetchitConfig) CatchUpLatest(ctx context.Context, mo *SingleMethodObj, current, latest plumbing.Hash, targetPath string, tag *[]string) error {
+	err := fc.CreateInProgress(ctx, mo.Target, mo.Method, latest)
+	if err != nil {
+		return utils.WrapErr(err, "Failed to create progress tag")
+	}
+
+	err = fc.Apply(ctx, mo, current, latest, mo.Target.Methods.Raw.TargetPath, tag)
+	if err != nil {
+		if err := fc.DeleteInProgress(ctx, mo.Target, mo.Method); err != nil {
+			return utils.WrapErr(err, "Error deleting progress tag")
+		}
+
+		return utils.WrapErr(err, "Failed to apply changes")
+	}
+
+	err = fc.UpdateCurrent(ctx, mo.Target, mo.Method, latest)
+	if err != nil {
+		return utils.WrapErr(err, "Error updating current tag")
+	}
+
+	err = fc.DeleteInProgress(ctx, mo.Target, mo.Method)
+	if err != nil {
+		return utils.WrapErr(err, "Error deleting progress tag")
+	}
+
+	return nil
+}
 
 /*
 For any given target, will get the head of the branch
 in the repository specified by the target's url
 */
-func (fc *FetchitConfig) GetLatest(target *Target) (plumbing.Hash, error) {
+func (fc *FetchitConfig) GetLatest(target *Target, method string) (plumbing.Hash, error) {
 	directory := filepath.Base(target.Url)
 
 	repo, err := git.PlainOpen(directory)
@@ -88,6 +151,60 @@ func (fc *FetchitConfig) UpdateCurrent(ctx context.Context, target *Target, meth
 	_, err = repo.CreateTag(tagName, newCurrent, nil)
 	if err != nil {
 		return utils.WrapErr(err, "Error creating new current tag with hash %s", newCurrent)
+	}
+
+	return nil
+}
+
+func (fc *FetchitConfig) GetInProgress(ctx context.Context, target *Target, method string) (plumbing.Hash, error) {
+	directory := filepath.Base(target.Url)
+	tagName := fmt.Sprintf("progress-%s", method)
+
+	repo, err := git.PlainOpen(directory)
+	if err != nil {
+		return plumbing.Hash{}, utils.WrapErr(err, "Error opening repository: %s", directory)
+	}
+
+	ref, err := repo.Tag(tagName)
+	if err != nil {
+		if err == git.ErrTagNotFound {
+			return plumbing.Hash{}, nil
+		}
+		return plumbing.Hash{}, utils.WrapErr(err, "Error getting in progress tag")
+	}
+
+	return ref.Hash(), nil
+}
+
+func (fc *FetchitConfig) CreateInProgress(ctx context.Context, target *Target, method string, latest plumbing.Hash) error {
+	directory := filepath.Base(target.Url)
+	tagName := fmt.Sprintf("progress-%s", method)
+
+	repo, err := git.PlainOpen(directory)
+	if err != nil {
+		return utils.WrapErr(err, "Error opening repository: %s", directory)
+	}
+
+	_, err = repo.CreateTag(tagName, latest, nil)
+	if err != nil && err != git.ErrTagExists {
+		return utils.WrapErr(err, "Error creating progress tag with hash %s", latest)
+	}
+
+	return nil
+}
+
+func (fc *FetchitConfig) DeleteInProgress(ctx context.Context, target *Target, method string) error {
+	directory := filepath.Base(target.Url)
+	tagName := fmt.Sprintf("progress-%s", method)
+
+	repo, err := git.PlainOpen(directory)
+	if err != nil {
+		return utils.WrapErr(err, "Error opening repository: %s", directory)
+	}
+
+	err = repo.DeleteTag(tagName)
+	if err != nil && err != git.ErrTagNotFound {
+		return utils.WrapErr(err, "Error deleting progress tag")
 	}
 
 	return nil
