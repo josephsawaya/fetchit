@@ -52,8 +52,10 @@ type ConfigFileTarget struct {
 
 // RawTarget to deploy pods from json or yaml files
 type RawTarget struct {
-	// Where in the git repository to fetch a file or directory (to fetch all files in directory)
+	// Where in the git repository to fetch a directory
 	TargetPath string `mapstructure:"targetPath"`
+	// Pattern match using glob in the targeted directory
+	GlobPattern *string `mapstructure:"glob"`
 	// Schedule is how often to check for git updates to the unit file
 	// Must be valid cron expression
 	Schedule string `mapstructure:"schedule"`
@@ -80,7 +82,10 @@ type SystemdTarget struct {
 	// Where in the git repository to fetch a systemd unit file
 	// All '*.service' files will be placed in appropriate systemd path
 	// TargetPath must be a single exact file
+	// Where in the git repository to fetch a directory
 	TargetPath string `mapstructure:"targetPath"`
+	// Pattern match using glob in the targeted directory
+	GlobPattern *string `mapstructure:"glob"`
 	// If true, will place unit file in /etc/systemd/system/
 	// If false (default) will place unit file in ~/.config/systemd/user/
 	Root bool `mapstructure:"root"`
@@ -105,8 +110,10 @@ type SystemdTarget struct {
 
 // FileTransferTarget to place files on host system
 type FileTransferTarget struct {
-	// Where in the git repository to fetch a file or directory (to fetch all files in directory)
+	// Where in the git repository to fetch a directory
 	TargetPath string `mapstructure:"targetPath"`
+	// Pattern match using glob in the targeted directory
+	GlobPattern *string `mapstructure:"glob"`
 	// Directory path on the host system in which the target files should be placed
 	DestinationDirectory string `mapstructure:"destinationDirectory"`
 	// Schedule is how often to check for git updates to the target files
@@ -122,8 +129,10 @@ type FileTransferTarget struct {
 
 // KubeTarget to launch pods using podman kube-play
 type KubeTarget struct {
-	// Where in the git repository to fetch a file or directory (to fetch all files in directory)
+	// Where in the git repository to fetch a directory
 	TargetPath string `mapstructure:"targetPath"`
+	// Pattern match using glob in the targeted directory
+	GlobPattern *string `mapstructure:"glob"`
 	// Schedule is how often to check for git updates with the target files
 	// Must be valid cron expression
 	Schedule string `mapstructure:"schedule"`
@@ -137,8 +146,10 @@ type KubeTarget struct {
 
 // AnsibleTarget to place and run ansible playbooks
 type AnsibleTarget struct {
-	// Where in the git repository to fetch a file or directory (to fetch all files in directory)
+	// Where in the git repository to fetch a directory
 	TargetPath string `mapstructure:"targetPath"`
+	// Pattern match using glob in the targeted directory
+	GlobPattern *string `mapstructure:"glob"`
 	// Schedule is how often to check for git updates with the target files
 	// Must be valid cron expression
 	Schedule string `mapstructure:"schedule"`

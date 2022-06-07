@@ -11,23 +11,22 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/gobwas/glob"
 	"github.com/redhat-et/fetchit/pkg/engine/utils"
-	"k8s.io/klog/v2"
 )
 
-func (fc *FetchitConfig) CatchUpCurrent(ctx context.Context, mo *SingleMethodObj, current plumbing.Hash, targetPath string, tag *[]string) error {
-	err := fc.Apply(ctx, mo, zeroHash, current, targetPath, tag)
+func (fc *FetchitConfig) CatchUpCurrent(ctx context.Context, mo *SingleMethodObj, current plumbing.Hash, targetPath string, tag *[]string, globPattern *string) error {
+	err := fc.Apply(ctx, mo, zeroHash, current, targetPath, tag, globPattern)
 	if err != nil {
 		return utils.WrapErr(err, "Failed to apply changes")
 	}
-	klog.Infof("Moved raw from %s to %s for target %s", zeroHash, current, mo.Target.Name)
 
 	return nil
 }
 
-func (fc *FetchitConfig) CatchUpProgress(ctx context.Context, mo *SingleMethodObj, current, progress plumbing.Hash, targetPath string, tag *[]string) error {
+func (fc *FetchitConfig) CatchUpProgress(ctx context.Context, mo *SingleMethodObj, current, progress plumbing.Hash, targetPath string, tag *[]string, globPattern *string) error {
 	if progress != current {
-		err := fc.Apply(ctx, mo, current, progress, targetPath, tag)
+		err := fc.Apply(ctx, mo, current, progress, targetPath, tag, globPattern)
 		if err != nil {
 			if err := fc.DeleteInProgress(ctx, mo.Target, mo.Method); err != nil {
 				return utils.WrapErr(err, "Failed to delete progress")
@@ -49,13 +48,13 @@ func (fc *FetchitConfig) CatchUpProgress(ctx context.Context, mo *SingleMethodOb
 	return nil
 }
 
-func (fc *FetchitConfig) CatchUpLatest(ctx context.Context, mo *SingleMethodObj, current, latest plumbing.Hash, targetPath string, tag *[]string) error {
+func (fc *FetchitConfig) CatchUpLatest(ctx context.Context, mo *SingleMethodObj, current, latest plumbing.Hash, targetPath string, tag *[]string, globPattern *string) error {
 	err := fc.CreateInProgress(ctx, mo.Target, mo.Method, latest)
 	if err != nil {
 		return utils.WrapErr(err, "Failed to create progress tag")
 	}
 
-	err = fc.Apply(ctx, mo, current, latest, mo.Target.Methods.Raw.TargetPath, tag)
+	err = fc.Apply(ctx, mo, current, latest, targetPath, tag, globPattern)
 	if err != nil {
 		if err := fc.DeleteInProgress(ctx, mo.Target, mo.Method); err != nil {
 			return utils.WrapErr(err, "Error deleting progress tag")
@@ -218,6 +217,7 @@ func (fc *FetchitConfig) Apply(
 	desiredState plumbing.Hash,
 	targetPath string,
 	tags *[]string,
+	globPattern *string,
 ) error {
 	if desiredState.IsZero() {
 		return errors.New("Cannot run Apply if desired state is empty")
@@ -234,7 +234,7 @@ func (fc *FetchitConfig) Apply(
 		return utils.WrapErr(err, "Error getting sub tree from hash %s from repo %s", desiredState, directory)
 	}
 
-	changeMap, err := getFilteredChangeMap(directory, targetPath, currentTree, desiredTree, tags)
+	changeMap, err := getFilteredChangeMap(directory, targetPath, currentTree, desiredTree, tags, globPattern)
 	if err != nil {
 		return utils.WrapErr(err, "Error getting filtered change map from %s to %s", currentState, desiredState)
 	}
@@ -283,7 +283,21 @@ func getFilteredChangeMap(
 	currentTree,
 	desiredTree *object.Tree,
 	tags *[]string,
+	globPattern *string,
 ) (map[*object.Change]string, error) {
+	var g glob.Glob
+	var err error
+	if globPattern == nil {
+		g, err = glob.Compile("**")
+		if err != nil {
+			return nil, utils.WrapErr(err, "Error compiling glob for pattern %s", globPattern)
+		}
+	} else {
+		g, err = glob.Compile(*globPattern)
+		if err != nil {
+			return nil, utils.WrapErr(err, "Error compiling glob for pattern %s", globPattern)
+		}
+	}
 
 	changes, err := currentTree.Diff(desiredTree)
 	if err != nil {
@@ -292,11 +306,10 @@ func getFilteredChangeMap(
 
 	changeMap := make(map[*object.Change]string)
 	for _, change := range changes {
-		if change.To.Name != "" {
-			checkTag(tags, change.To.Name)
+		if change.To.Name != "" && checkTag(tags, change.To.Name) && g.Match(change.To.Name) {
 			path := filepath.Join(directory, targetPath, change.To.Name)
 			changeMap[change] = path
-		} else if change.From.Name != "" {
+		} else if change.From.Name != "" && checkTag(tags, change.From.Name) && g.Match(change.To.Name) {
 			checkTag(tags, change.From.Name)
 			changeMap[change] = deleteFile
 		}

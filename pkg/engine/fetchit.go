@@ -459,7 +459,7 @@ func (hc *FetchitConfig) processRaw(ctx context.Context, target *Target, skew in
 
 	if initial {
 		if current != zeroHash {
-			err = hc.CatchUpCurrent(ctx, mo, current, raw.TargetPath, &tag)
+			err = hc.CatchUpCurrent(ctx, mo, current, raw.TargetPath, &tag, raw.GlobPattern)
 			if err != nil {
 				klog.Errorf("Failed to catch up to current: %v", err)
 				return
@@ -473,14 +473,13 @@ func (hc *FetchitConfig) processRaw(ctx context.Context, target *Target, skew in
 		}
 
 		if progress != zeroHash {
-			err := hc.CatchUpProgress(ctx, mo, current, progress, raw.TargetPath, &tag)
+			err := hc.CatchUpProgress(ctx, mo, current, progress, raw.TargetPath, &tag, raw.GlobPattern)
 			if err != nil {
 				klog.Errorf("Failed to catch up to in progress: %v", err)
 			}
 			current = progress
 			klog.Infof("Moved raw from %s to %s for target %s", current, progress, target.Name)
 		}
-
 		raw.initialRun = false
 	}
 
@@ -491,12 +490,14 @@ func (hc *FetchitConfig) processRaw(ctx context.Context, target *Target, skew in
 	}
 
 	if latest != current {
-		err := hc.CatchUpLatest(ctx, mo, current, latest, raw.TargetPath, &tag)
+		err := hc.CatchUpLatest(ctx, mo, current, latest, raw.TargetPath, &tag, raw.GlobPattern)
 		if err != nil {
 			klog.Errorf("Error catching up to latest: %v", err)
 			return
 		}
 		klog.Infof("Moved raw from %s to %s for target %s", current, latest, target.Name)
+	} else {
+		klog.Infof("No updates, raw at %s for target %s", current, target.Name)
 	}
 }
 
@@ -539,7 +540,7 @@ func (hc *FetchitConfig) processAnsible(ctx context.Context, target *Target, ske
 	}
 
 	if latest != current {
-		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Ansible.TargetPath, &tag)
+		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Ansible.TargetPath, &tag, ans.GlobPattern)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
 			err := hc.DeleteInProgress(ctx, target, mo.Method)
@@ -621,7 +622,7 @@ func (hc *FetchitConfig) processSystemd(ctx context.Context, target *Target, ske
 	}
 
 	if latest != current {
-		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Systemd.TargetPath, &tag)
+		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Systemd.TargetPath, &tag, sd.GlobPattern)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
 			err := hc.DeleteInProgress(ctx, target, mo.Method)
@@ -682,7 +683,7 @@ func (hc *FetchitConfig) processFileTransfer(ctx context.Context, target *Target
 	}
 
 	if latest != current {
-		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.FileTransfer.TargetPath, nil)
+		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.FileTransfer.TargetPath, nil, ft.GlobPattern)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
 			err := hc.DeleteInProgress(ctx, target, mo.Method)
@@ -745,7 +746,7 @@ func (hc *FetchitConfig) processKube(ctx context.Context, target *Target, skew i
 	}
 
 	if latest != current {
-		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Kube.TargetPath, &tag)
+		err = hc.Apply(ctx, mo, current, latest, mo.Target.Methods.Kube.TargetPath, &tag, kube.GlobPattern)
 		if err != nil {
 			klog.Errorf("Failed to apply changes: %v", err)
 			err := hc.DeleteInProgress(ctx, target, mo.Method)
