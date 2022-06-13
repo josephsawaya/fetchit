@@ -15,6 +15,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/sdk/resource"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 
 	"k8s.io/klog/v2"
 )
@@ -272,10 +278,41 @@ func getMethodTargetScheds(targetConfigs []*TargetConfig, fetchit *Fetchit) *Fet
 
 // This assumes each Target has no more than 1 each of Raw, Systemd, FileTransfer
 func (f *Fetchit) RunTargets() {
+	fi, err := os.Create("traces.txt")
+	if err != nil {
+		klog.Error(err)
+	}
+	defer fi.Close()
+
+	exp, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint("http://0.0.0.0:14268/api/traces")))
+	if err != nil {
+		klog.Error(err)
+		return
+	}
+
+	tp := tracesdk.NewTracerProvider(
+		// Always be sure to batch in production.
+		tracesdk.WithBatcher(exp),
+		// Record information about this application in a Resource.
+		tracesdk.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String("raw"),
+			attribute.String("environment", "demo"),
+			attribute.Int64("ID", 1),
+		)),
+	)
+
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			klog.Error(err)
+		}
+	}()
+	otel.SetTracerProvider(tp)
+
 	for method := range f.methodTargetScheds {
 		// ConfigReload, Systemd.AutoUpdateAll, Clean methods do not include git URL
 		if method.Target().url != "" {
-			if err := getClone(method.Target(), f.pat); err != nil {
+			if err := getClone(context.Background(), method.Target(), f.pat); err != nil {
 				klog.Warningf("Target: %s, clone error: %v, will retry next scheduled run", method.Target().Name, err)
 			}
 		}
@@ -298,7 +335,10 @@ func (f *Fetchit) RunTargets() {
 	select {}
 }
 
-func getClone(target *Target, PAT string) error {
+func getClone(ctx context.Context, target *Target, PAT string) error {
+	_, span := otel.Tracer("component-clone").Start(ctx, "clone")
+	defer span.End()
+
 	directory := filepath.Base(target.url)
 	absPath, err := filepath.Abs(directory)
 	if err != nil {

@@ -14,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 
 	"k8s.io/klog/v2"
@@ -111,10 +113,15 @@ func (r *Raw) Process(ctx context.Context, conn context.Context, PAT string, ske
 	target.mu.Lock()
 	defer target.mu.Unlock()
 
+	var span trace.Span
+
+	ctx, span = otel.Tracer("raw").Start(ctx, "ProcessRaw")
+	defer span.End()
+
 	tag := []string{".json", ".yaml", ".yml"}
 
 	if r.initialRun {
-		err := getClone(target, PAT)
+		err := getClone(ctx, target, PAT)
 		if err != nil {
 			klog.Errorf("Failed to clone repo at %s for target %s: %v", target.url, target.Name, err)
 			return
