@@ -1,4 +1,12 @@
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: env
+data:
+  APP_COLOR: blue
+  tree: trunk
+---
+apiVersion: v1
 kind: Pod
 metadata:
   name: colors_pod2
@@ -8,7 +16,7 @@ spec:
     image: docker.io/mmumshad/simple-webapp-color:latest
     ports:
     - containerPort: 8080
-      hostPort: 7080
+      hostPort: 7020
     envFrom:
     - configMapRef:
         name: env
