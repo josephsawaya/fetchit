@@ -36,8 +36,6 @@ type TargetConfig struct {
 	Device            string             `mapstructure:"device"`
 	Disconnected      bool               `mapstructure:"disconnected"`
 	VerifyCommitsInfo *VerifyCommitsInfo `mapstructure:"verifyCommitsInfo"`
-	TrackBadCommits   bool               `mapstructure:"trackBadCommits"`
-	Rollback          bool               `mapstructure:"rollback"`
 	Branch            string             `mapstructure:"branch"`
 	Ansible           []*Ansible         `mapstructure:"ansible"`
 	FileTransfer      []*FileTransfer    `mapstructure:"filetransfer"`
@@ -60,8 +58,6 @@ type Target struct {
 	disconnected    bool
 	gitsignVerify   bool
 	gitsignRekorURL string
-	trackBadCommits bool
-	rollback        bool
 }
 
 type SchedInfo struct {

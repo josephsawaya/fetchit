@@ -97,43 +97,19 @@ func currentToLatest(ctx, conn context.Context, m Method, target *Target, tag *[
 		return fmt.Errorf("Failed to get current commit: %v", err)
 	}
 
-	if target.rollback && target.trackBadCommits {
-		if _, ok := BadCommitList[directory]; !ok {
-			BadCommitList[directory] = make(map[string]map[plumbing.Hash]empty)
-		}
-
-		if _, ok := BadCommitList[directory][m.GetKind()]; !ok {
-			BadCommitList[directory][m.GetKind()] = make(map[plumbing.Hash]empty)
-		}
-
-		if _, ok := BadCommitList[directory][m.GetKind()][latest]; ok {
-			klog.Infof("No changes applied to target %s this run, %s currently at %s", directory, m.GetKind(), current)
-			return nil
-		}
-	}
-
 	if latest != current {
 		if err = m.Apply(ctx, conn, current, latest, tag); err != nil {
-			if target.rollback {
-				// Roll back automatically
-				klog.Errorf("Failed to apply changes, rolling back to %v: %v", current, err)
-				if err = checkout(target, current); err != nil {
-					return utils.WrapErr(err, "Failed to checkout %s", current)
-				}
-				if err = m.Apply(ctx, conn, latest, current, tag); err != nil {
-					// Roll back failed
-					return fmt.Errorf("Roll back failed, state between %s and %s: %v", current, latest, err)
-				}
-				if target.trackBadCommits {
-					BadCommitList[directory][m.GetKind()][latest] = empty{}
-				}
-				return fmt.Errorf("Rolled back to %v: %v", current, err)
-			} else {
-				return fmt.Errorf("Failed to apply changes from %v to %v: %v", current, latest, err)
+			// Roll back automatically
+			klog.Errorf("Failed to apply changes, rolling back to %v: %v", current, err)
+			if err = checkout(target, current); err != nil {
+				return utils.WrapErr(err, "Failed to checkout %s", current)
 			}
-
+			if err = m.Apply(ctx, conn, latest, current, tag); err != nil {
+				// Roll back failed
+				return fmt.Errorf("Roll back failed, state between %s and %s: %v", current, latest, err)
+			}
+			return fmt.Errorf("Rolled back to %v: %v", current, err)
 		}
-
 		updateCurrent(ctx, target, latest, m.GetKind(), m.GetName())
 		logger.Infof("Moved %s from %s to %s for git target %s", m.GetName(), current.String()[:hashReportLen], latest, target.url)
 	} else {
