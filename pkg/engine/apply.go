@@ -2,6 +2,9 @@ package engine
 
 import (
 	"context"
+	"crypto/sha1"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -13,6 +16,14 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/gobwas/glob"
+	gitsign "github.com/sigstore/gitsign/pkg/git"
+	gitsignrekor "github.com/sigstore/gitsign/pkg/rekor"
+	rekorclient "github.com/sigstore/rekor/pkg/client"
+)
+
+const (
+	defaultRekorURL = "https://rekor.sigstore.dev"
+	hashReportLen   = 9
 )
 
 func applyChanges(ctx context.Context, target *Target, targetPath string, globPattern *string, currentState, desiredState plumbing.Hash, tags *[]string) (map[*object.Change]string, error) {
@@ -41,6 +52,7 @@ func applyChanges(ctx context.Context, target *Target, targetPath string, globPa
 
 //getLatest will get the head of the branch in the repository specified by the target's url
 func getLatest(target *Target) (plumbing.Hash, error) {
+	ctx := context.Background()
 	directory := getDirectory(target)
 
 	repo, err := git.PlainOpen(directory)
@@ -66,11 +78,104 @@ func getLatest(target *Target) (plumbing.Hash, error) {
 		return plumbing.Hash{}, utils.WrapErr(err, "Error getting reference to worktree for repository", directory)
 	}
 
+	hashStr := branch.Hash().String()[:hashReportLen]
 	if err := wt.Checkout(&git.CheckoutOptions{Hash: branch.Hash()}); err != nil {
-		return plumbing.Hash{}, utils.WrapErr(err, "Error checking out %s on branch %s", branch.Hash(), target.branch)
+		return plumbing.Hash{}, utils.WrapErr(err, "Error checking out %s on branch %s", hashStr, target.branch)
 	}
 
+	if target.gitsignVerify {
+		commit, err := repo.CommitObject(branch.Hash())
+		if err != nil {
+			return plumbing.Hash{}, utils.WrapErr(err, "Error getting verified commit at hash %s from repository %s", hashStr, directory)
+		}
+		if err := VerifyGitsign(ctx, commit, hashStr, directory, target.gitsignRekorURL); err != nil {
+			return plumbing.Hash{}, utils.WrapErr(err, "Requested verified commit signatures, but commit %s from repository %s failed verification", hashStr, directory)
+		}
+	}
 	return branch.Hash(), err
+}
+
+// VerifyGitsign verifies any commit signed using sigstore/gitsign & rekor
+func VerifyGitsign(ctx context.Context, commit *object.Commit, hash, repo, url string) error {
+	if commit.PGPSignature == "" {
+		return fmt.Errorf("Requested verified commit signatures, but commit %s from repository %s has no PGPSignature", hash, repo)
+	}
+	// Extract signature from commit
+	pgpsig := commit.PGPSignature + "\n"
+	r := strings.NewReader(pgpsig)
+	sig := make([]byte, len(pgpsig))
+	if _, err := r.Read(sig); err != nil {
+		return utils.WrapErr(err, "Error reading signature from commit %s", hash)
+	}
+	// Extract everything else from commit
+	d := &plumbing.MemoryObject{}
+	if err := commit.EncodeWithoutSignature(d); err != nil {
+		return utils.WrapErr(err, "Error decoding data from commit %s", hash)
+	}
+	er, err := d.Reader()
+	if err != nil {
+		return utils.WrapErr(err, "Error configuring data reader from commit %s", hash)
+	}
+	data := make([]byte, d.Size())
+	if _, err = er.Read(data); err != nil {
+		return utils.WrapErr(err, "Error reading data from commit %s", hash)
+	}
+
+	// Rekor client
+	rekorURL := url
+	if rekorURL == "" {
+		rekorURL = defaultRekorURL
+	}
+	client, err := gitsignrekor.New(rekorURL, rekorclient.WithUserAgent("gitsign"))
+	if err != nil {
+		return utils.WrapErr(err, "Error obtaining rekor client")
+	}
+	summary, err := gitsign.Verify(ctx, client, data, sig, true)
+	if err != nil {
+		if summary != nil && summary.Cert != nil {
+			logger.Infof("Bad Signature: GNUPG: %s %s", certHexFingerprint(summary.Cert), summary.Cert.Subject.String())
+		}
+		return utils.WrapErr(err, "Failed to verify signature")
+	}
+	logger.Infof("Validated Git signature: GNUPG: %s SUBJECT/ISSUER: %s %s", certHexFingerprint(summary.Cert), summary.Cert.Subject.String(), summary.Cert.Issuer)
+	logger.Infof("Validated Rekor entry: %d From: %s", summary.LogEntry.LogIndex, summary.Cert.EmailAddresses)
+	return nil
+}
+
+// borrowed from sigstore/gitsign/internal/git
+// certHexFingerprint calculates the hex SHA1 fingerprint of a certificate.
+func certHexFingerprint(cert *x509.Certificate) string {
+	if len(cert.Raw) == 0 {
+		return ""
+	}
+
+	fpr := sha1.Sum(cert.Raw)
+	return hex.EncodeToString(fpr[:])
+}
+
+func checkout(target *Target, hash plumbing.Hash) error {
+	if hash == plumbing.ZeroHash {
+		return nil
+	}
+
+	directory := getDirectory(target)
+
+	repo, err := git.PlainOpen(directory)
+	if err != nil {
+		return utils.WrapErr(err, "Error opening repository: %s", directory)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return utils.WrapErr(err, "Error getting reference to worktree for repository", directory)
+	}
+
+	err = wt.Checkout(&git.CheckoutOptions{Hash: hash})
+	if err != nil {
+		return utils.WrapErr(err, "Error checking out %s on branch %s", hash, target.branch)
+	}
+
+	return nil
 }
 
 func getCurrent(target *Target, methodType, methodName string) (plumbing.Hash, error) {

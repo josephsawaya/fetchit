@@ -6,7 +6,63 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  CGO_ENABLED: 0
+  PODMAN_VER: v4.1.1
+
 jobs:
+
+  build-podman-v4:
+    env:
+      CGO_ENABLED: 1 # CGO is required for podman
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Cache podman bin
+        id: cache-podman-bin
+        uses: actions/cache@v3
+        with:
+          path: |
+            ./bin
+          key: ${{ runner.os }}-podman-${{ env.PODMAN_VER }}
+          restore-keys: |
+            ${{ runner.os }}-podman
+      - uses: actions/checkout@v3
+        if: steps.cache-podman-bin.outputs.cache-hit != 'true'
+        with:
+          repository: containers/podman
+          ref: v4.1.1
+
+      - uses: actions/setup-go@v2
+        if: steps.cache-podman-bin.outputs.cache-hit != 'true'
+        with:
+          go-version: ${{ env.GOVER }}
+
+      - name: Cache go modules
+        if: steps.cache-podman-bin.outputs.cache-hit != 'true'
+        uses: actions/cache@v2
+        with:
+          # In order:
+          # * Module download cache
+          # * Build cache (Linux)
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-podman-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-podman
+      - name: Add build packages
+        if: steps.cache-podman-bin.outputs.cache-hit != 'true'
+        run: sudo apt install -y libsystemd-dev libseccomp-dev pkg-config golang-github-proglottis-gpgme-dev
+
+      - name: Build podman v4
+        if: steps.cache-podman-bin.outputs.cache-hit != 'true'
+        run: make binaries
+
+      # store podman binary as artifact
+      - uses: actions/upload-artifact@v3
+        with:
+          name: podman-bins
+          path: bin
 
   build:
 
@@ -19,7 +75,7 @@ jobs:
         run: sudo apt install curl
       
       - name: Build the image
-        run: go mod tidy && go mod vendor && docker build . --file Dockerfile --tag quay.io/fetchit/fetchit-amd:latest
+        run: go mod tidy -compat=1.17 && go mod vendor && docker build . --file Dockerfile --tag quay.io/fetchit/fetchit-amd:latest
     
       - name: Export image
         run: docker save -o /tmp/fetchit.tar quay.io/fetchit/fetchit-amd:latest
@@ -36,7 +92,7 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Build the image
-        run: go mod tidy && go mod vendor && make build-ansible-cross-build-linux-amd64
+        run: go mod tidy -compat=1.17 && go mod vendor && make build-ansible-cross-build-linux-amd64
 
       - name: docker list images
         run: docker images
@@ -52,7 +108,7 @@ jobs:
 
   build-ansible-arm:
     runs-on: ubuntu-latest
-    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, ansible-validate, loader-validate, disconnected-validate ]
+    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, gitsign-verify-validate, ansible-validate, loader-validate, disconnected-validate ]
     if: >
       (github.event_name == 'push' || github.event_name == 'schedule') &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
@@ -66,7 +122,7 @@ jobs:
         run: sudo apt install podman build-essential qemu-user qemu-user-static
 
       - name: Build the image
-        run: go mod tidy && go mod vendor && CTR_CMD=podman make build-ansible-cross-build-linux-arm64
+        run: go mod tidy -compat=1.17 && go mod vendor && CTR_CMD=podman make build-ansible-cross-build-linux-arm64
 
       - name: Export image
         run: podman save -o /tmp/ansible-arm.tar quay.io/fetchit/fetchit-ansible-arm:latest
@@ -98,7 +154,7 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Build the image
-        run: go mod tidy && go mod vendor && make build-systemd-cross-build-linux-amd64
+        run: go mod tidy -compat=1.17 && go mod vendor && make build-systemd-cross-build-linux-amd64
 
       - name: docker list images
         run: docker images
@@ -114,7 +170,7 @@ jobs:
 
   build-systemd-arm:
     runs-on: ubuntu-latest
-    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, ansible-validate, loader-validate, disconnected-validate ]
+    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, gitsign-verify-validate, ansible-validate, loader-validate, disconnected-validate ]
     if: >
       (github.event_name == 'push' || github.event_name == 'schedule') &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
@@ -128,7 +184,7 @@ jobs:
         run: sudo apt install podman build-essential qemu-user qemu-user-static
 
       - name: Build the image
-        run: go mod tidy && go mod vendor && CTR_CMD=podman make build-systemd-cross-build-linux-arm64
+        run: go mod tidy -compat=1.17 && go mod vendor && CTR_CMD=podman make build-systemd-cross-build-linux-arm64
 
       - name: Export image
         run: podman save -o /tmp/systemd-arm.tar quay.io/fetchit/fetchit-systemd-arm:latest
@@ -144,6 +200,17 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
 
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
@@ -194,6 +261,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -242,7 +320,18 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
-        
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -295,6 +384,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -335,6 +435,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -366,12 +477,80 @@ jobs:
       - name: ensure container is gone
         run: sudo podman ps -a
 
+  gitsign-verify-validate:
+    runs-on: ubuntu-latest
+    needs: [ build , pull-and-archive ]
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
+      - name: Enable the podman socket
+        run: sudo systemctl enable --now podman.socket
+
+      - name: pull artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: fetchit-image
+          path: /tmp
+
+      - name: Load the image
+        run: sudo podman load -i /tmp/fetchit.tar
+
+      - name: Create destination directory
+        run: sudo mkdir /tmp/ft
+
+      - name: tag the image
+        run: sudo podman tag quay.io/fetchit/fetchit-amd:latest quay.io/fetchit/fetchit:latest
+
+      - name: Start fetchit
+        run: sudo podman run -d --name fetchit -v fetchit-volume:/opt -v ./examples/gitsign-verify-config.yaml:/opt/mount/config.yaml -v /run/podman/podman.sock:/run/podman/podman.sock --security-opt label=disable quay.io/fetchit/fetchit-amd:latest
+
+      - name: Wait for fetchit to deploy
+        run: timeout 150 bash -c "until [ -f /tmp/ft/anotherfile.txt ]; do sleep 2; done"
+
+      - name: Wait for fetchit to deploy
+        run: timeout 150 bash -c "until [ -f /tmp/ft/hello.txt ]; do sleep 2; done"
+
+      - name: Ensure fetchit logs include Rekor entry
+        run: sudo podman logs fetchit 2>&1 | grep 'Validated Rekor entry'
+
+      - name: Ensure fetchit logs include git signature verification
+        run: sudo podman logs fetchit 2>&1 | grep 'Validated Git signature'
+
+      - name: Logs
+        if: always()
+        run: sudo podman logs fetchit
+
+      - name: ensure container is gone
+        run: sudo podman ps -a
+
   systemd-validate:
     runs-on: ubuntu-latest
     needs: [ build, build-systemd-amd ]
     steps:
       - uses: actions/checkout@v2
- 
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -405,6 +584,17 @@ jobs:
     needs: [ build , build-systemd-amd ]
     steps:
       - uses: actions/checkout@v2
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
 
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
@@ -476,6 +666,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -524,6 +725,17 @@ jobs:
     needs: [ build , build-systemd-amd ]
     steps:
       - uses: actions/checkout@v2
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
 
       - name: enable podman.socket
         run: |
@@ -581,6 +793,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -633,6 +856,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -682,7 +916,18 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
- 
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -719,7 +964,18 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
-        
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -756,7 +1012,18 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
-        
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -808,7 +1075,18 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
-        
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -852,12 +1130,123 @@ jobs:
       - name: Check the capabilities of cap1
         run: if [[ $(sudo podman container inspect cap1 --format {{.EffectiveCaps}} | grep NET_ADMIN | wc -l) = "1" ]] ; then echo "Container successfully launched"; else exit 1; fi
 
+  rollback-validate:
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'push' || github.event_name == 'schedule') &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [ build , pull-and-archive ]
+    steps:
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
+      - name: Enable the podman socket
+        run: sudo systemctl enable --now podman.socket
+
+      - uses: actions/checkout@v3
+        with:
+          path: main
+
+      - name: checkout with token
+        uses: actions/checkout@v3
+        with:
+          path: ci-rollback
+          ref: ci-rollback
+
+      - name: Enable the podman socket
+        run: sudo systemctl enable --now podman.socket
+
+      - name: reset and commit working
+        run: |
+          cd ci-rollback
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          rm -rf ./examples/ci-rollback || true
+          mkdir ./examples/ci-rollback
+          cp ./examples/rollback/working.yaml ./examples/ci-rollback/working.yaml
+          git add ./examples
+          git commit -m "add working" -a || true
+          git push -f || true
+      
+      - name: pull artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: fetchit-image
+          path: /tmp
+
+      - name: Load the image
+        run: sudo podman load -i /tmp/fetchit.tar
+
+      - name: pull artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: colors
+          path: /tmp
+
+      - name: Load the image
+        run: sudo podman load -i /tmp/colors.tar
+
+      - name: tag the image
+        run: sudo podman tag quay.io/fetchit/fetchit-amd:latest quay.io/fetchit/fetchit:latest
+
+      - name: set values relating to the current env
+        run: | 
+          cd ci-rollback
+          sed -i 's|  url: http://github.com/containers/fetchit|  url: http://github.com/${{ github.repository }}|g' ./examples/ci-rollback.yaml
+          sed -i 's|   branch: ci-rollback|  branch: "{{ github.ref }}"|g' ./examples/ci-rollback.yaml
+      - name: Start fetchit
+        run: sudo podman run -d --name fetchit -v fetchit-volume:/opt -v /home/runner/work/fetchit/fetchit/ci-rollback/examples/ci-rollback.yaml:/opt/mount/config.yaml -v /run/podman/podman.sock:/run/podman/podman.sock --security-opt label=disable quay.io/fetchit/fetchit-amd:latest
+
+      - name: identify rollback1 container
+        run: timeout 150 bash -c -- 'c=0 ; until [ $c -eq 1 ]; do sudo podman ps; c=$(sudo podman ps | grep rollback | wc -l); done'
+
+      - name: Logs
+        if: always()
+        run: sudo podman logs fetchit
+
+      - name: commit working
+        run: |
+          cd ci-rollback
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          ls
+          cp ./examples/rollback/1-working.yaml ./examples/ci-rollback/1-working.yaml
+          cp ./examples/rollback/2-broken.yaml ./examples/ci-rollback/2-broken.yaml
+          git add ./examples
+          git commit -m "add 1-working and 2-broken" -a
+          git push -f
+      
+      - name: Wait for 2 pods
+        run: timeout 150 bash -c -- 'c=0 ; until [ $c -eq 2 ]; do sudo podman ps; c=$(sudo podman ps | grep rollback | wc -l); done'
+
+      - name: Check rollback succeeded
+        run: timeout 150 bash -c -- 'c=0 ; until [ $c -eq 1 ]; do c=$(sudo podman ps | grep rollback | wc -l); done'
+
   multi-engine-validate:
     runs-on: ubuntu-latest
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
-        
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -924,7 +1313,18 @@ jobs:
     needs: [ build , pull-and-archive ]
     steps:
       - uses: actions/checkout@v2
-        
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -1005,6 +1405,17 @@ jobs:
         with:
           path: ci
           ref: ci
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
 
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
@@ -1088,6 +1499,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
+
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
 
@@ -1145,6 +1567,17 @@ jobs:
         uses: actions/checkout@v3
         with:
           path: ci
+
+      - name: pull in podman
+        uses: actions/download-artifact@v1
+        with:
+          name: podman-bins
+          path: bin
+
+      - name: replace
+        run: |
+          chmod +x bin/podman
+          sudo mv bin/podman /usr/bin/podman
 
       - name: Enable the podman socket
         run: sudo systemctl enable --now podman.socket
@@ -1226,7 +1659,7 @@ jobs:
 
   push-amd-image-to-registry:
     runs-on: ubuntu-latest
-    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, ansible-validate, loader-validate, disconnected-validate ]
+    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, gitsign-verify-validate, ansible-validate, loader-validate, disconnected-validate ]
     if: >
       (github.event_name == 'push' || github.event_name == 'schedule') &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
@@ -1253,7 +1686,7 @@ jobs:
 
   build-arm-and-manifest-list:
     runs-on: ubuntu-latest
-    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, ansible-validate, loader-validate, disconnected-validate ]
+    needs: [ build, raw-validate, fetchit-config-target-no-config-validate, fetchit-config-reload-validate, clean-validate, kube-validate, systemd-validate, systemd-enable-validate, systemd-user-enable-validate, systemd-autoupdate-validate, systemd-restart-validate, systemd-validate-exact-file, multi-engine-validate, make-change-to-repo, filetransfer-validate, filetransfer-validate-exact-file, gitsign-verify-validate, ansible-validate, loader-validate, disconnected-validate ]
     if: >
       (github.event_name == 'push' || github.event_name == 'schedule') &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
@@ -1268,7 +1701,7 @@ jobs:
         run: sudo apt install podman build-essential qemu-user qemu-user-static  
 
       - name: Build the arm image
-        run: go mod tidy && go mod vendor && CTR_CMD=podman make build-containerized-cross-build-linux-arm64
+        run: go mod tidy -compat=1.17 && go mod vendor && CTR_CMD=podman make build-containerized-cross-build-linux-arm64
 
       - name: Export image
         run: podman save -o /tmp/fetchit-arm.tar quay.io/fetchit/fetchit-arm:latest

@@ -38,14 +38,15 @@ This example can be found in [./examples/readme-config.yaml](examples/readme-con
 
 ```
 targetConfigs:
-- name: fetchit
-  url: http://github.com/containers/fetchit
+- url: http://github.com/containers/fetchit
   branch: main
   fileTransfer:
-    targetPath: examples/fileTransfer/hello.txt
+  - name: ft-ex
+    targetPath: examples/fileTransfer
     destinationDirectory: /tmp
     schedule: "*/1 * * * *" 
   raw:
+  - name: raw-ex
     targetPath: examples/raw
     schedule: "*/1 * * * *"
 ```
@@ -57,13 +58,13 @@ Ensure that there is a config at `$HOME/.fetchit/config.yaml` before attempting 
 
 For root
 ```
-cp systemd/fetchit.root /etc/systemd/system/fetchit.service
+cp systemd/fetchit-root.service /etc/systemd/system/fetchit.service
 systemctl enable fetchit --now
 ```
 
 ```
 mkdir -p ~/.config/systemd/user/
-cp systemd/fetchit.user ~/.config/systemd/user/
+cp systemd/fetchit-user.service ~/.config/systemd/user/fetchit.service
 systemctl --user enable fetchit --now
 ```
 
